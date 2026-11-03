@@ -31,6 +31,59 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
 
+      # The upstream games.json does not yet contain PR 728's server metadata.
+      # Preserve the metadata bundled with this build when loading the runtime cache.
+      - name: Preserve bundled dedicated-server metadata
+        shell: pwsh
+        run: |
+          $path = "src-tauri/src/game/mod.rs"
+          $source = Get-Content $path -Raw
+          $newline = if ($source.Contains("`r`n")) { "`r`n" } else { "`n" }
+
+          $pattern = "(?m)^fn get_cached_games\(\) -> Result<GamesCache<'static>> \{\r?\n[\s\S]*?^\}"
+          $regex = [regex]::new($pattern)
+          if ($regex.Matches($source).Count -ne 1) {
+            throw "Could not identify get_cached_games() exactly once; refusing to patch the wrong source."
+          }
+
+          $replacement = @'
+fn get_cached_games() -> Result<GamesCache<'static>> {
+    let path = util::path::default_app_data_dir().join(CACHE_FILE_NAME);
+
+    let str = fs::read_to_string(path)?;
+    let mut cache: GamesCache<'static> = serde_json::from_str(str.leak())?;
+
+    let mut bundled_servers: HashMap<String, DedicatedServer<'static>> =
+        serde_json::from_str::<Vec<GameData<'static>>>(BUNDLED_GAMES_JSON)?
+            .into_iter()
+            .filter_map(|game| {
+                game.dedicated_server
+                    .map(|server| (game.slug.into_owned(), server))
+            })
+            .collect();
+
+    for game in &mut cache.games {
+        if game.dedicated_server.is_none() {
+            game.dedicated_server = bundled_servers.remove(game.slug.as_ref());
+        }
+    }
+
+    Ok(cache)
+}
+'@
+
+          $updated = $regex.Replace($source, [System.Text.RegularExpressions.MatchEvaluator]{ param($match) $replacement }, 1)
+          if (-not $updated.Contains("bundled_servers.remove(game.slug.as_ref())")) {
+            throw "The dedicated-server metadata patch was not applied."
+          }
+
+          if (-not $updated.Contains("collections::HashMap,")) {
+            $updated = $updated.Replace("    borrow::Cow,", "    borrow::Cow,$newline    collections::HashMap,")
+          }
+
+          Set-Content -Path $path -Value $updated -NoNewline -Encoding utf8
+          Write-Host "Applied cached dedicated-server metadata fallback."
+
       # GitHub's Windows runner includes the MSVC build tools and WebView2.
       - name: Install frontend dependencies
         run: pnpm install --frozen-lockfile
