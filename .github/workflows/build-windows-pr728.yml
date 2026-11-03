@@ -47,31 +47,30 @@ jobs:
           }
 
           $replacement = @'
-fn get_cached_games() -> Result<GamesCache<'static>> {
-    let path = util::path::default_app_data_dir().join(CACHE_FILE_NAME);
+          fn get_cached_games() -> Result<GamesCache<'static>> {
+              let path = util::path::default_app_data_dir().join(CACHE_FILE_NAME);
 
-    let str = fs::read_to_string(path)?;
-    let mut cache: GamesCache<'static> = serde_json::from_str(str.leak())?;
+              let str = fs::read_to_string(path)?;
+              let mut cache: GamesCache<'static> = serde_json::from_str(str.leak())?;
 
-    let mut bundled_servers: HashMap<String, DedicatedServer<'static>> =
-        serde_json::from_str::<Vec<GameData<'static>>>(BUNDLED_GAMES_JSON)?
-            .into_iter()
-            .filter_map(|game| {
-                game.dedicated_server
-                    .map(|server| (game.slug.into_owned(), server))
-            })
-            .collect();
+              let mut bundled_servers: HashMap<String, DedicatedServer<'static>> =
+                  serde_json::from_str::<Vec<GameData<'static>>>(BUNDLED_GAMES_JSON)?
+                      .into_iter()
+                      .filter_map(|game| {
+                          game.dedicated_server
+                              .map(|server| (game.slug.into_owned(), server))
+                      })
+                      .collect();
 
-    for game in &mut cache.games {
-        if game.dedicated_server.is_none() {
-            game.dedicated_server = bundled_servers.remove(game.slug.as_ref());
-        }
-    }
+              for game in &mut cache.games {
+                  if game.dedicated_server.is_none() {
+                      game.dedicated_server = bundled_servers.remove(game.slug.as_ref());
+                  }
+              }
 
-    Ok(cache)
-}
-'@
-
+              Ok(cache)
+          }
+          '@
           $updated = $regex.Replace($source, [System.Text.RegularExpressions.MatchEvaluator]{ param($match) $replacement }, 1)
           if (-not $updated.Contains("bundled_servers.remove(game.slug.as_ref())")) {
             throw "The dedicated-server metadata patch was not applied."
